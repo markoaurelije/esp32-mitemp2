@@ -4,7 +4,6 @@ import bluetooth
 import random
 import struct
 import time
-import micropython
 from binascii import hexlify
 
 from micropython import const
@@ -108,6 +107,7 @@ class BLETemperatureCentral:
         self._write_callback = None
         self._service_done_callback = None
         self._char_done_callback = None
+        self._name_found_callback = None
 
         # Persistent callback for when new data is notified from the device.
         self._notify_callback = None
@@ -118,15 +118,17 @@ class BLETemperatureCentral:
 
         self.requested_service = bluetooth.UUID(0x2a00)
         self.requested_mac = None
+        self.search_name = None
 
     def _irq(self, event, data):
         # print(event, data)
+
         if event == _IRQ_SCAN_RESULT:
             addr_type, addr, connectable, rssi, adv_data = data
             name = decode_name(bytes(adv_data))
-            # print(addr_type, bytes(addr), connectable, hexlify(bytes(
-            #     adv_data), ' '), ' > {0}'.format(name) if name else '')
-            # if connectable and _ENV_SENSE_UUID in decode_services(adv_data):
+            if name and self.search_name:
+                if self._name_found_callback:
+                    self._name_found_callback(addr_type, addr, name)
             if bytes(addr) == self.requested_mac:
                 # print(" Found device, stop scanning.")
                 self._addr_type = addr_type
@@ -215,16 +217,17 @@ class BLETemperatureCentral:
         return self._conn_handle is not None
 
     # Find a device advertising the environmental sensor service.
-    def scan(self, callback=None):
+    def scan(self, name_search=False, callback=None):
         self._addr_type = None
         self._addr = None
+        self.search_name = name_search
         self._scan_callback = callback
         # self._ble.gap_scan(2000, 30000, 30000)
         self._ble.gap_scan(10000, 30000, 30000, True)
 
     # Connect to the specified device (otherwise use cached address from a scan).
     def connect(self, addr_type=None, addr=None, callback=None):
-        self._addr_type = addr_type or self._addr_type
+        self._addr_type = addr_type if addr_type is not None else self._addr_type
         self._addr = addr or self._addr
         self._conn_callback = callback
         if self._addr_type is None or self._addr is None:
@@ -298,9 +301,11 @@ def get_sensor_data(mac=b'\xa4\xc18\x82Y\xdf'):
             not_found = True
             print('No sensor found.')
 
-    central.scan(callback=on_scan)
+    # central.scan(callback=on_scan)
 
     central.on_notify(on_mi_data_rx)
+
+    central.connect(0, mac)
 
     # Wait for connection...
     i = 0
@@ -328,4 +333,31 @@ def get_sensor_data(mac=b'\xa4\xc18\x82Y\xdf'):
 
 
 def scan_for_sensors():
-    return
+    ble = bluetooth.BLE()
+    central = BLETemperatureCentral(ble)
+    result = []
+    scan_done = False
+
+    def on_scan_rx(addr_type, addr, name):
+        if name == "LYWSD03MMC":
+            res = (addr_type, hexlify(bytes(addr), ':'), name)
+            if res not in result:
+                result.append(res)
+    
+    def on_scan_done(addr_type, addr, name):
+        print("Found:", result)
+        nonlocal scan_done 
+        scan_done = True
+
+    central._name_found_callback = on_scan_rx
+    central.scan(name_search=True, callback=on_scan_done)
+
+    i = 0
+    while not scan_done:
+        time.sleep_ms(100)
+        i += 1
+        if i > 120:
+            print("Timeout")
+            break
+    
+    return result
