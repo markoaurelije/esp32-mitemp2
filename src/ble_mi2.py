@@ -121,7 +121,7 @@ class BLETemperatureCentral:
         self.search_name = None
 
     def _irq(self, event, data):
-        # print(event, data)
+        print(event, data)
 
         if event == _IRQ_SCAN_RESULT:
             addr_type, addr, connectable, rssi, adv_data = data
@@ -211,10 +211,6 @@ class BLETemperatureCentral:
                 if self._notify_callback:
                     self._notify_callback(bytes(notify_data))
 
-    # Returns true if we've successfully connected
-
-    def is_connected(self):
-        return self._conn_handle is not None
 
     # Find a device advertising the environmental sensor service.
     def scan(self, name_search=False, callback=None):
@@ -243,7 +239,7 @@ class BLETemperatureCentral:
 
     # Issues an (asynchronous) read, will invoke callback with data.
     def read(self, callback):
-        if not self.is_connected():
+        if not self._conn_handle:
             return
         self._read_callback = callback
         self._ble.gattc_read(self._conn_handle, self._value_handle)
@@ -273,7 +269,7 @@ class BLETemperatureCentral:
                 self._ble.gatts_notify(conn_handle, self._handle)
 
 
-def get_sensor_data(mac=b'\xa4\xc18\x82Y\xdf'):
+def get_sensor_data(mac=b'\xa4\xc18\x82Y\xdf', callback=None):
     ble = bluetooth.BLE()
     central = BLETemperatureCentral(ble)
     central.requested_mac = mac
@@ -285,79 +281,52 @@ def get_sensor_data(mac=b'\xa4\xc18\x82Y\xdf'):
         temperature = (data[0] + data[1]*255) / 100
         humidity = data[2]
         battery = (data[3] + data[4]*255) / 1000
-        print('Temp: ', temperature, "°C")
-        print('Hum: ', humidity, "%")
-        print('Batt: ', battery, "V")
+        # print('Temp: ', temperature, "°C")
+        # print('Hum: ', humidity, "%")
+        # print('Batt: ', battery, "V")
         nonlocal sensor_data 
         sensor_data = (temperature, humidity, battery)
         central.disable_notifications(central.disconnect)
+        if callback:
+            callback(sensor_data)
 
-    def on_scan(addr_type, addr, name):
-        if addr_type is not None:
-            print('Found sensor:', hexlify(addr, ':'), name)
-            central.connect()
-        else:
-            nonlocal not_found
-            not_found = True
-            print('No sensor found.')
-
-    # central.scan(callback=on_scan)
+    def on_connected(*args, **kwargs):
+        central.enable_notifications()
 
     central.on_notify(on_mi_data_rx)
 
-    central.connect(0, mac)
+    central.connect(0, mac, on_connected)
 
-    # Wait for connection...
-    i = 0
-    while not central.is_connected():
-        time.sleep_ms(100)
-        i += 1
-        if i > 100:
-            print("Timeout")
-            return
-        if not_found:
-            return
-
-    # print('Connected')
-    central.enable_notifications()
-
-    i = 0
-    while not sensor_data or central.is_connected():
-        time.sleep_ms(100)
-        i += 1
-        if i > 100:
-            print("Timeout")
-            return sensor_data
-
-    return sensor_data
-
-
-def scan_for_sensors():
+def scan_for_sensors(_name = "LYWSD03MMC", callback=None):
     ble = bluetooth.BLE()
     central = BLETemperatureCentral(ble)
     result = []
-    scan_done = False
 
     def on_scan_rx(addr_type, addr, name):
-        if name == "LYWSD03MMC":
-            res = (addr_type, hexlify(bytes(addr), ':'), name)
+        if name == _name:
+            # res = (addr_type, bytes(addr), hexlify(bytes(addr), ':'))
+            res = bytes(addr)
             if res not in result:
                 result.append(res)
     
     def on_scan_done(addr_type, addr, name):
-        print("Found:", result)
-        nonlocal scan_done 
-        scan_done = True
-
+        # print("Found:", result)
+        if callback:
+            callback(result)
+    
     central._name_found_callback = on_scan_rx
     central.scan(name_search=True, callback=on_scan_done)
 
-    i = 0
-    while not scan_done:
-        time.sleep_ms(100)
-        i += 1
-        if i > 120:
-            print("Timeout")
-            break
+def get_readings_from_all():
+    def on_scan_done(result):
+        print('Found:', result)
+        def read_one_by_one():
+            if result:
+                sensor = result.pop()
+                print('Reading...', sensor)
+                get_sensor_data(sensor, lambda x:(print(x),read_one_by_one()))
+            else: print('done')
     
-    return result
+        read_one_by_one()
+
+    scan_for_sensors("LYWSD03MMC", on_scan_done)

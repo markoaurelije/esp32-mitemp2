@@ -20,9 +20,10 @@ if 'config.json' in os.listdir():
 led = LedMatrix(led_panel_width, led_panel_height, led_panel_cascades)
 led.center_text = True
 led.clear(color)
+led.clear()
 
 one_hour_cnt = 0
-PERIOD = 15000
+PERIOD = 15000  # 15 seconds
 ONE_HOUR = 60*60*1000 / PERIOD
 
 import ntptime
@@ -31,6 +32,8 @@ import utime
 import urequests
 import ure
 import dht
+import micropython
+from ble_mi2 import get_sensor_data
 
 def getHumidity():
     r = urequests.get("http://vinbit.eu/marvin/?loc=Spansko&sens=Humidity")
@@ -109,8 +112,14 @@ if (machine.RTC().datetime()[6]) % PERIOD > 0:
     # utime.sleep(PERIOD - (machine.RTC().datetime()[6])%PERIOD)
     initTimer()
 
-# debug2 = "Wakeup on {} second".format(machine.RTC().datetime()[6])
-# timer.init(period=PERIOD, mode=machine.Timer.PERIODIC, callback=showTime)
+def upload_sensor_data(sens):
+    if sens:
+        r = urequests.get("http://vinbit.eu//observe/push/dev-21/s0-tempsens/t0-{0}/s1-vlagasens/t1-{1}/s2-battsens/t2-{2}".format(*sens))
+        res = r.text
+        r.close()
 
-# showTime(None)
-# debug3 = "End on {} second".format(machine.RTC().datetime()[6])
+def cb(*args, **kwargs):
+    get_sensor_data(mac=b'\xa4\xc18\x82Y\xdf', callback=upload_sensor_data)
+
+timer2 = machine.Timer(2)
+timer2.init(period=1000*60*5, callback=cb)
